@@ -1,0 +1,22 @@
+# VCS
+.git
+.gitignore
+
+# Node/Vite artifacts
+node_modules
+web/node_modules
+web/dist
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor
+.DS_Store
+.vscode
+.idea
+
+# Build outputs
+/dist
+/build
+/tmp
