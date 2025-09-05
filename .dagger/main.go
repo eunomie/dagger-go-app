@@ -6,21 +6,30 @@ import (
 	"dagger/dagger-go-app/internal/dagger"
 )
 
-type DaggerGoApp struct{}
+type DaggerGoApp struct {
+	Src *dagger.Directory
+}
 
-// Create the image containing the application
-func (m *DaggerGoApp) Image(
+// Creates a new DaggerGoApp instance
+func New(
 // Source directory of the application
 // +optional
 // +defaultPath="/"
 	src *dagger.Directory,
-) *dagger.Container {
-	webbuild := dag.Container().
+) *DaggerGoApp {
+	return &DaggerGoApp{
+		Src: src,
+	}
+}
+
+// Environment for the frontend part of the application
+func (m *DaggerGoApp) FrontendEnv() *dagger.Container {
+	return dag.Container().
 		From("node:24-alpine3.22").
 		WithWorkdir("/app/web").
 		WithDirectory(
 			".",
-			src.Directory("web"),
+			m.Src.Directory("web"),
 			dagger.ContainerWithDirectoryOpts{
 				Include: []string{
 					"package.json",
@@ -29,15 +38,28 @@ func (m *DaggerGoApp) Image(
 			}).
 		WithMountedCache("/root/.npm", dag.CacheVolume("npm-cache")).
 		WithExec([]string{"npm", "install", "--no-audit", "--no-fund"}).
-		WithDirectory(".", src.Directory("web")).
-		WithExec([]string{"npm", "run", "build"})
+		WithDirectory(".", m.Src.Directory("web"))
+}
 
-	gobuild := dag.Container().
+// Build frontend application
+func (m *DaggerGoApp) FrontentBuild() *dagger.Container {
+	return m.FrontendEnv().
+		WithExec([]string{"npm", "run", "build"})
+}
+
+// Distribution of the frontend
+func (m *DaggerGoApp) FrontendDist() *dagger.Directory {
+	return m.FrontentBuild().Directory("/app/web/dist")
+}
+
+// Environment for the backend part of the application
+func (m *DaggerGoApp) BackendEnv() *dagger.Container {
+	return dag.Container().
 		From("golang:1.25-alpine3.22").
 		WithWorkdir("/app").
 		WithDirectory(
 			".",
-			src,
+			m.Src,
 			dagger.ContainerWithDirectoryOpts{
 				Include: []string{
 					"go.mod",
@@ -47,18 +69,31 @@ func (m *DaggerGoApp) Image(
 		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
 		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build")).
 		WithExec([]string{"go", "mod", "download"}).
-		WithDirectory(".", src.WithoutDirectory("web")).
-		WithEnvVariable("CGO_ENABLED", "0").
-		WithExec([]string{"go", "build", "-ldflags", "-s -w", "-o", "server", "./main.go"})
+		WithDirectory(".", m.Src.WithoutDirectory("web")).
+		WithEnvVariable("CGO_ENABLED", "0")
+}
 
+// Build backend application
+func (m *DaggerGoApp) BackendBuild() *dagger.Container {
+	return m.BackendEnv().
+		WithExec([]string{"go", "build", "-ldflags", "-s -w", "-o", "server", "./main.go"})
+}
+
+// Distribution of the backend
+func (m *DaggerGoApp) BackendDist() *dagger.File {
+	return m.BackendBuild().File("server")
+}
+
+// Create the image containing the application
+func (m *DaggerGoApp) Image() *dagger.Container {
 	runtime := dag.Container().
 		From("alpine:3.22").
 		WithExec([]string{"apk", "add", "--no-cache", "ca-certificates"}).
 		WithWorkdir("/app").
 		// copy Backend binary
-		WithFile("/app/server", gobuild.File("server")).
+		WithFile("/app/server", m.BackendDist()).
 		// copy Frontend dist
-		WithDirectory("/app/web/dist", webbuild.Directory("/app/web/dist")).
+		WithDirectory("/app/web/dist", m.FrontendDist()).
 		WithEnvVariable("ADDR", ":8080").
 		WithExposedPort(8080).
 		WithDefaultArgs([]string{"/app/server"})
@@ -78,13 +113,8 @@ func (m *DaggerGoApp) DB() *dagger.Container {
 }
 
 // Return the app as a service, connected to a database
-func (m *DaggerGoApp) Service(
-// Source directory of the application
-// +optional
-// +defaultPath="/"
-	src *dagger.Directory,
-) *dagger.Service {
-	return m.Image(src).
+func (m *DaggerGoApp) Service() *dagger.Service {
+	return m.Image().
 		WithServiceBinding("db", m.DB().AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true})).
 		WithEnvVariable("DATABASE_URL", "postgres://app:app@db:5432/appdb?sslmode=disable").
 		AsService()
