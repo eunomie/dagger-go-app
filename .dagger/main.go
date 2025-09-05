@@ -1,37 +1,64 @@
-// A generated module for DaggerGoApp functions
-//
-// This module has been generated via dagger init and serves as a reference to
-// basic module structure as you get started with Dagger.
-//
-// Two functions have been pre-created. You can modify, delete, or add to them,
-// as needed. They demonstrate usage of arguments and return types using simple
-// echo and grep commands. The functions can be called from the dagger CLI or
-// from one of the SDKs.
-//
-// The first line in this comment block is a short description line and the
-// rest is a long description with more detail on the module's purpose or usage,
-// if appropriate. All modules should have a short description.
+// A module to build, test and run Dagger Go App
 
 package main
 
 import (
-	"context"
 	"dagger/dagger-go-app/internal/dagger"
 )
 
 type DaggerGoApp struct{}
 
-// Returns a container that echoes whatever string argument is provided
-func (m *DaggerGoApp) ContainerEcho(stringArg string) *dagger.Container {
-	return dag.Container().From("alpine:latest").WithExec([]string{"echo", stringArg})
-}
+// Create the image containing the application
+func (m *DaggerGoApp) Image(
+// Source directory of the application
+// +optional
+// +defaultPath="/"
+	src *dagger.Directory,
+) *dagger.Container {
+	webbuild := dag.Container().
+		From("node:24-alpine3.22").
+		WithWorkdir("/app/web").
+		WithDirectory(
+			".",
+			src.Directory("web"),
+			dagger.ContainerWithDirectoryOpts{
+				Include: []string{
+					"package.json",
+					"package-lock.json",
+				},
+			}).
+		WithExec([]string{"npm", "install", "--no-audit", "--no-fund"}).
+		WithDirectory(".", src.Directory("web")).
+		WithExec([]string{"npm", "run", "build"})
 
-// Returns lines that match a pattern in the files of the provided Directory
-func (m *DaggerGoApp) GrepDir(ctx context.Context, directoryArg *dagger.Directory, pattern string) (string, error) {
-	return dag.Container().
-		From("alpine:latest").
-		WithMountedDirectory("/mnt", directoryArg).
-		WithWorkdir("/mnt").
-		WithExec([]string{"grep", "-R", pattern, "."}).
-		Stdout(ctx)
+	gobuild := dag.Container().
+		From("golang:1.25-alpine3.22").
+		WithWorkdir("/app").
+		WithDirectory(
+			".",
+			src,
+			dagger.ContainerWithDirectoryOpts{
+				Include: []string{
+					"go.mod",
+					"go.sum",
+				},
+			}).
+		WithExec([]string{"go", "mod", "download"}).
+		WithDirectory(".", src.WithoutDirectory("web")).
+		WithEnvVariable("CGO_ENABLED", "0").
+		WithExec([]string{"go", "build", "-ldflags", "-s -w", "-o", "server", "./main.go"})
+
+	runtime := dag.Container().
+		From("alpine:3.22").
+		WithExec([]string{"apk", "add", "--no-cache", "ca-certificates"}).
+		WithWorkdir("/app").
+		// copy Backend binary
+		WithFile("/app/server", gobuild.File("server")).
+		// copy Frontend dist
+		WithDirectory("/app/web/dist", webbuild.Directory("/app/web/dist")).
+		WithEnvVariable("ADDR", ":8080").
+		WithExposedPort(8080).
+		WithDefaultArgs([]string{"/app/server"})
+
+	return runtime
 }
