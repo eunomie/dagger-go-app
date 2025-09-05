@@ -27,6 +27,7 @@ func (m *DaggerGoApp) Image(
 					"package-lock.json",
 				},
 			}).
+		WithMountedCache("/root/.npm", dag.CacheVolume("npm-cache")).
 		WithExec([]string{"npm", "install", "--no-audit", "--no-fund"}).
 		WithDirectory(".", src.Directory("web")).
 		WithExec([]string{"npm", "run", "build"})
@@ -43,6 +44,8 @@ func (m *DaggerGoApp) Image(
 					"go.sum",
 				},
 			}).
+		WithMountedCache("/go/pkg/mod", dag.CacheVolume("go-mod")).
+		WithMountedCache("/root/.cache/go-build", dag.CacheVolume("go-build")).
 		WithExec([]string{"go", "mod", "download"}).
 		WithDirectory(".", src.WithoutDirectory("web")).
 		WithEnvVariable("CGO_ENABLED", "0").
