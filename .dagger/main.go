@@ -3,6 +3,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+
 	"dagger/dagger-go-app/internal/dagger"
 )
 
@@ -52,6 +55,23 @@ func (m *DaggerGoApp) FrontendDist() *dagger.Directory {
 	return m.FrontentBuild().Directory("/app/web/dist")
 }
 
+// Run frontend tests
+func (m *DaggerGoApp) FrontendTest(ctx context.Context) (string, error) {
+	ctr := m.FrontendEnv().
+		WithExec([]string{"npm", "ci"}).
+		WithExec([]string{"npm", "run", "test:run"}, dagger.ContainerWithExecOpts{Expect: dagger.ReturnTypeAny})
+	out, err := ctr.CombinedOutput(ctx)
+	if err != nil {
+		return "", err
+	}
+	if e, err := ctr.ExitCode(ctx); err != nil {
+		return "", err
+	} else if e != 0 {
+		return "", fmt.Errorf("frontend tests failed:\n%s", out)
+	}
+	return out, nil
+}
+
 // Environment for the backend part of the application
 func (m *DaggerGoApp) BackendEnv() *dagger.Container {
 	return dag.Container().
@@ -82,6 +102,35 @@ func (m *DaggerGoApp) BackendBuild() *dagger.Container {
 // Distribution of the backend
 func (m *DaggerGoApp) BackendDist() *dagger.File {
 	return m.BackendBuild().File("server")
+}
+
+// Run backend tests
+func (m *DaggerGoApp) BackendTest(ctx context.Context) (string, error) {
+	ctr := m.BackendEnv().
+		WithExec([]string{"go", "test", "./..."}, dagger.ContainerWithExecOpts{Expect: dagger.ReturnTypeAny})
+	out, err := ctr.CombinedOutput(ctx)
+	if err != nil {
+		return "", err
+	}
+	if e, err := ctr.ExitCode(ctx); err != nil {
+		return "", err
+	} else if e != 0 {
+		return "", fmt.Errorf("backend tests failed:\n%s", out)
+	}
+	return out, nil
+}
+
+// Run tests
+func (m *DaggerGoApp) Test(ctx context.Context) (string, error) {
+	fout, err := m.FrontendTest(ctx)
+	if err != nil {
+		return "", err
+	}
+	bout, err := m.BackendTest(ctx)
+	if err != nil {
+		return "", err
+	}
+	return fout + "\n" + bout, nil
 }
 
 // Create the image containing the application
