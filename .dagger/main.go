@@ -10,9 +10,9 @@ type DaggerGoApp struct{}
 
 // Create the image containing the application
 func (m *DaggerGoApp) Image(
-// Source directory of the application
-// +optional
-// +defaultPath="/"
+	// Source directory of the application
+	// +optional
+	// +defaultPath="/"
 	src *dagger.Directory,
 ) *dagger.Container {
 	webbuild := dag.Container().
@@ -61,4 +61,28 @@ func (m *DaggerGoApp) Image(
 		WithDefaultArgs([]string{"/app/server"})
 
 	return runtime
+}
+
+// Create a database container
+func (m *DaggerGoApp) DB() *dagger.Container {
+	return dag.Container().
+		From("postgres:17-alpine3.22").
+		WithEnvVariable("POSTGRES_USER", "app").
+		WithEnvVariable("POSTGRES_PASSWORD", "app").
+		WithEnvVariable("POSTGRES_DB", "appdb").
+		WithMountedCache("/var/lib/postgresql/data", dag.CacheVolume("db-data")).
+		WithExposedPort(5432)
+}
+
+// Return the app as a service, connected to a database
+func (m *DaggerGoApp) Service(
+// Source directory of the application
+// +optional
+// +defaultPath="/"
+	src *dagger.Directory,
+) *dagger.Service {
+	return m.Image(src).
+		WithServiceBinding("db", m.DB().AsService(dagger.ContainerAsServiceOpts{UseEntrypoint: true})).
+		WithEnvVariable("DATABASE_URL", "postgres://app:app@db:5432/appdb?sslmode=disable").
+		AsService()
 }
